@@ -127,6 +127,51 @@ def load_recruitment():
     except Exception as e:
         print("❌ ERROR LOAD RECRUITMENT:", e)
         return pd.DataFrame()
+    
+
+
+# LOAD SALARY & PPH21
+
+def load_salary():
+    try:
+        # =====================
+        # GAJI
+        # =====================
+        df_gaji = pd.read_excel(
+            FILE_PATH,
+            sheet_name="GAJI DAN PPH21",
+            usecols="B:D",
+            skiprows=2
+        )
+
+        df_gaji.columns = ["project", "periode", "gaji"]
+
+        # CLEANING
+        df_gaji['project'] = df_gaji['project'].astype(str).str.strip()
+        df_gaji['periode'] = df_gaji['periode'].astype(str).str.strip()
+        df_gaji['gaji'] = pd.to_numeric(df_gaji['gaji'], errors='coerce')
+
+        # =====================
+        # PPH21
+        # =====================
+        df_pph = pd.read_excel(
+            FILE_PATH,
+            sheet_name="GAJI DAN PPH21",
+            usecols="G:I",
+            skiprows=2
+        )
+
+        df_pph.columns = ["project", "periode", "pph21"]
+
+        df_pph['project'] = df_pph['project'].astype(str).str.strip()
+        df_pph['periode'] = df_pph['periode'].astype(str).str.strip()
+        df_pph['pph21'] = pd.to_numeric(df_pph['pph21'], errors='coerce')
+
+        return df_gaji, df_pph
+
+    except Exception as e:
+        print("❌ ERROR LOAD SALARY:", e)
+        return pd.DataFrame(), pd.DataFrame()
 
 
 
@@ -207,6 +252,21 @@ def apply_recruitment_filters(df):
     return df
 
 
+# FILTER SALARY
+
+def apply_salary_filters(df, column_periode):
+    periode = request.args.get("periode")
+    project = request.args.get("project")
+
+    if periode:
+        df = df[df[column_periode] == periode]
+
+    if project:
+        df = df[df['project'] == project]
+
+    return df
+
+
 # KPI INTERNSHIP
 
 def calculate_kpi(df):
@@ -248,6 +308,16 @@ def calculate_recruitment_kpi(df):
         "accepted": len(df[df['status'] == 'accepted']),
         "rejected": len(df[df['status'] == 'rejected']),
         "on_process": len(df[df['status'] == 'on process'])
+    }
+
+
+# KPI SALARY
+
+def calculate_salary_kpi(df_gaji, df_pph):
+    return {
+        "total_gaji": int(df_gaji['gaji'].sum()),
+        "total_pph21": int(df_pph['pph21'].sum()),
+        "jumlah_project": df_gaji['project'].nunique()
     }
 
 # DASHBOARD INTERNSHIP
@@ -354,6 +424,39 @@ def recruitment_dashboard():
         "funnel": funnel
     })
 
+
+# DASHBOARD SALARY
+
+@app.route("/salary/dashboard")
+def salary_dashboard():
+    df_gaji, df_pph = load_salary()
+
+    # APPLY FILTER
+    df_gaji = apply_salary_filters(df_gaji, "periode")
+    df_pph = apply_salary_filters(df_pph, "periode")
+
+    # KPI
+    kpi = calculate_salary_kpi(df_gaji, df_pph)
+
+    # BAR GAJI PER PROJECT
+    gaji_project = df_gaji.groupby('project')['gaji'].sum().reset_index()
+
+    # LINE TREND GAJI
+    gaji_trend = df_gaji.groupby('periode')['gaji'].sum().reset_index()
+
+    # BAR PPH21
+    pph_project = df_pph.groupby('project')['pph21'].sum().reset_index()
+
+    # TREND PPH21
+    pph_trend = df_pph.groupby('periode')['pph21'].sum().reset_index()
+
+    return jsonify({
+        "kpi": kpi,
+        "gaji_project": gaji_project.to_dict(orient='records'),
+        "gaji_trend": gaji_trend.to_dict(orient='records'),
+        "pph_project": pph_project.to_dict(orient='records'),
+        "pph_trend": pph_trend.to_dict(orient='records')
+    })
 
 # RUN
 
