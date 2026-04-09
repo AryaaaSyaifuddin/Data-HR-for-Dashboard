@@ -9,9 +9,9 @@ CORS(app)
 FILE_PATH = "DATA DASHBOARD HRD PT ALDZAMA.xlsx"
 
 
-# =========================
+
 # LOAD INTERNSHIP DATA
-# =========================
+
 def load_data():
     try:
         df = pd.read_excel(
@@ -42,9 +42,9 @@ def load_data():
         return pd.DataFrame()
 
 
-# =========================
+
 # LOAD MANPOWER DATA
-# =========================
+
 def load_manpower():
     try:
         df = pd.read_excel(
@@ -76,9 +76,63 @@ def load_manpower():
         return pd.DataFrame()
 
 
-# =========================
+
+# LOAD RECRUITMENT DATA
+
+def load_recruitment():
+    try:
+        sheets = [
+            "RECRUITMENT",
+            "RECRUITMENT OKT",
+            "RECRUITMENT FEB 2026"
+        ]
+
+        df_list = []
+
+        for sheet in sheets:
+            df = pd.read_excel(
+                FILE_PATH,
+                sheet_name=sheet,
+                usecols="B:E"
+            )
+
+            df.columns = [
+                "nama",
+                "posisi",
+                "periode",
+                "status"
+            ]
+
+            df_list.append(df)
+
+        # GABUNG SEMUA DATA
+        df = pd.concat(df_list, ignore_index=True)
+
+        # CLEANING
+        df['posisi'] = df['posisi'].astype(str).str.strip()
+        df['status'] = df['status'].astype(str).str.strip().str.lower()
+
+        # NORMALISASI STATUS
+        df['status'] = df['status'].replace({
+            'on process user': 'on process',
+            'on process hr': 'on process'
+        })
+
+        # FORMAT TANGGAL
+        df['periode'] = pd.to_datetime(df['periode'], errors='coerce')
+        df['bulan'] = df['periode'].dt.strftime('%B %Y')
+
+        return df
+
+    except Exception as e:
+        print("❌ ERROR LOAD RECRUITMENT:", e)
+        return pd.DataFrame()
+
+
+
+
 # FILTER (INTERNSHIP)
-# =========================
+
 def apply_filters(df):
     institusi = request.args.get("institusi")
     penempatan = request.args.get("penempatan")
@@ -103,9 +157,9 @@ def apply_filters(df):
 
     return df
 
-# =========================
+
 # FILTER MANPOWER
-# =========================
+
 def apply_manpower_filters(df):
     branch = request.args.get("branch")
     jabatan = request.args.get("jabatan")
@@ -127,9 +181,34 @@ def apply_manpower_filters(df):
     return df
 
 
-# =========================
+# FILTER RECRUITMENT
+
+def apply_recruitment_filters(df):
+    status = request.args.get("status")
+    posisi = request.args.get("posisi")
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    # FILTER STATUS
+    if status:
+        df = df[df['status'] == status.lower()]
+
+    # FILTER POSISI
+    if posisi:
+        df = df[df['posisi'] == posisi]
+
+    # FILTER TANGGAL
+    if start and end:
+        df = df[
+            (df['periode'] >= pd.to_datetime(start)) &
+            (df['periode'] <= pd.to_datetime(end))
+        ]
+
+    return df
+
+
 # KPI INTERNSHIP
-# =========================
+
 def calculate_kpi(df):
     today = pd.to_datetime(datetime.today().date())
     batas = today + timedelta(days=14)
@@ -150,9 +229,9 @@ def calculate_kpi(df):
     }
 
 
-# =========================
+
 # KPI MANPOWER
-# =========================
+
 def calculate_manpower_kpi(df):
     return {
         "total": len(df),
@@ -161,10 +240,19 @@ def calculate_manpower_kpi(df):
     }
 
 
-# =========================
+# KPI RECRUITMENT
+
+def calculate_recruitment_kpi(df):
+    return {
+        "total": len(df),
+        "accepted": len(df[df['status'] == 'accepted']),
+        "rejected": len(df[df['status'] == 'rejected']),
+        "on_process": len(df[df['status'] == 'on process'])
+    }
+
 # DASHBOARD INTERNSHIP
-# =========================
-@app.route("/dashboard")
+
+@app.route("/internship/dashboard")
 def get_dashboard():
     df = load_data()
     df = apply_filters(df)
@@ -191,6 +279,7 @@ def get_dashboard():
         "ket": ket.to_dict(orient='records')
     })
 
+# DASHBOARD MAN POWER
 
 @app.route("/manpower/dashboard")
 def manpower_dashboard():
@@ -221,8 +310,52 @@ def manpower_dashboard():
         "status_kontrak": status_kontrak.to_dict(orient='records')
     })
 
-# =========================
+
+# DASHBOARD RECRUITMENT
+
+@app.route("/recruitment/dashboard")
+def recruitment_dashboard():
+    df = load_recruitment()
+
+    # 🔥 APPLY FILTER DI SINI
+    df = apply_recruitment_filters(df)
+
+    # KPI
+    kpi = calculate_recruitment_kpi(df)
+
+    # STATUS (PIE)
+    status = df['status'].value_counts().reset_index()
+    status.columns = ['status', 'jumlah']
+
+    # POSISI (BAR)
+    posisi = df['posisi'].value_counts().reset_index()
+    posisi.columns = ['posisi', 'jumlah']
+
+    # TREND (LINE)
+    trend = df['bulan'].value_counts().sort_index().reset_index()
+    trend.columns = ['bulan', 'jumlah']
+
+    # FUNNEL
+    funnel_order = ['on process', 'mcu', 'accepted', 'rejected', 'mengundurkan diri']
+    funnel_data = df['status'].value_counts()
+
+    funnel = []
+    for f in funnel_order:
+        funnel.append({
+            "status": f,
+            "jumlah": int(funnel_data.get(f, 0))
+        })
+
+    return jsonify({
+        "kpi": kpi,
+        "status": status.to_dict(orient='records'),
+        "posisi": posisi.to_dict(orient='records'),
+        "trend": trend.to_dict(orient='records'),
+        "funnel": funnel
+    })
+
+
 # RUN
-# =========================
+
 if __name__ == "__main__":
     app.run(debug=True)
