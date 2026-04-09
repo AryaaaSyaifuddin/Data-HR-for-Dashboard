@@ -134,9 +134,6 @@ def load_recruitment():
 
 def load_salary():
     try:
-        # =====================
-        # GAJI
-        # =====================
         df_gaji = pd.read_excel(
             FILE_PATH,
             sheet_name="GAJI DAN PPH21",
@@ -146,14 +143,10 @@ def load_salary():
 
         df_gaji.columns = ["project", "periode", "gaji"]
 
-        # CLEANING
         df_gaji['project'] = df_gaji['project'].astype(str).str.strip()
         df_gaji['periode'] = df_gaji['periode'].astype(str).str.strip()
         df_gaji['gaji'] = pd.to_numeric(df_gaji['gaji'], errors='coerce')
 
-        # =====================
-        # PPH21
-        # =====================
         df_pph = pd.read_excel(
             FILE_PATH,
             sheet_name="GAJI DAN PPH21",
@@ -172,6 +165,43 @@ def load_salary():
     except Exception as e:
         print("❌ ERROR LOAD SALARY:", e)
         return pd.DataFrame(), pd.DataFrame()
+    
+
+# LOAD TRAINING DATA
+
+def load_training():
+    try:
+        df = pd.read_excel(
+            FILE_PATH,
+            sheet_name="INTERNAL & EXTERNAL TRAINING FE",
+            usecols="B:H"
+        )
+
+        df.columns = [
+            "jenis",
+            "nama",
+            "divisi",
+            "pelatihan",
+            "lembaga",
+            "periode",
+            "status"
+        ]
+
+        # CLEANING
+        df['jenis'] = df['jenis'].astype(str).str.strip().str.lower()
+        df['divisi'] = df['divisi'].astype(str).str.strip()
+        df['pelatihan'] = df['pelatihan'].astype(str).str.strip()
+        df['status'] = df['status'].astype(str).str.strip().str.lower()
+
+        # FORMAT TANGGAL
+        df['periode'] = pd.to_datetime(df['periode'], errors='coerce')
+        df['bulan'] = df['periode'].dt.strftime('%B %Y')
+
+        return df
+
+    except Exception as e:
+        print("❌ ERROR LOAD TRAINING:", e)
+        return pd.DataFrame()
 
 
 
@@ -267,6 +297,32 @@ def apply_salary_filters(df, column_periode):
     return df
 
 
+# FILTER TRAINING
+
+def apply_training_filters(df):
+    jenis = request.args.get("jenis")
+    divisi = request.args.get("divisi")
+    status = request.args.get("status")
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    if jenis:
+        df = df[df['jenis'] == jenis.lower()]
+
+    if divisi:
+        df = df[df['divisi'] == divisi]
+
+    if status:
+        df = df[df['status'] == status.lower()]
+
+    if start and end:
+        df = df[
+            (df['periode'] >= pd.to_datetime(start)) &
+            (df['periode'] <= pd.to_datetime(end))
+        ]
+
+    return df
+
 # KPI INTERNSHIP
 
 def calculate_kpi(df):
@@ -318,6 +374,19 @@ def calculate_salary_kpi(df_gaji, df_pph):
         "total_gaji": int(df_gaji['gaji'].sum()),
         "total_pph21": int(df_pph['pph21'].sum()),
         "jumlah_project": df_gaji['project'].nunique()
+    }
+
+
+# KPI TRAINING
+
+def calculate_training_kpi(df):
+    return {
+        "total": len(df),
+        "internal": len(df[df['jenis'] == 'internal']),
+        "external": len(df[df['jenis'] == 'external']),
+        "done": len(df[df['status'] == 'done']),
+        "in_progress": len(df[df['status'] == 'in progress']),
+        "cancel": len(df[df['status'] == 'cancel'])
     }
 
 # DASHBOARD INTERNSHIP
@@ -456,6 +525,48 @@ def salary_dashboard():
         "gaji_trend": gaji_trend.to_dict(orient='records'),
         "pph_project": pph_project.to_dict(orient='records'),
         "pph_trend": pph_trend.to_dict(orient='records')
+    })
+
+
+# DASHBOARD TRAINING
+
+@app.route("/training/dashboard")
+def training_dashboard():
+    df = load_training()
+
+    # 🔥 APPLY FILTER
+    df = apply_training_filters(df)
+
+    # KPI
+    kpi = calculate_training_kpi(df)
+
+    # JENIS (PIE)
+    jenis = df['jenis'].value_counts().reset_index()
+    jenis.columns = ['jenis', 'jumlah']
+
+    # DIVISI (BAR)
+    divisi = df['divisi'].value_counts().reset_index()
+    divisi.columns = ['divisi', 'jumlah']
+
+    # PELATIHAN (BAR)
+    pelatihan = df['pelatihan'].value_counts().reset_index()
+    pelatihan.columns = ['pelatihan', 'jumlah']
+
+    # STATUS (PIE)
+    status = df['status'].value_counts().reset_index()
+    status.columns = ['status', 'jumlah']
+
+    # TREND (LINE)
+    trend = df['bulan'].value_counts().sort_index().reset_index()
+    trend.columns = ['bulan', 'jumlah']
+
+    return jsonify({
+        "kpi": kpi,
+        "jenis": jenis.to_dict(orient='records'),
+        "divisi": divisi.to_dict(orient='records'),
+        "pelatihan": pelatihan.to_dict(orient='records'),
+        "status": status.to_dict(orient='records'),
+        "trend": trend.to_dict(orient='records')
     })
 
 # RUN
