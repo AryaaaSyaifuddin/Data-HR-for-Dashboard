@@ -202,7 +202,168 @@ def load_training():
     except Exception as e:
         print("❌ ERROR LOAD TRAINING:", e)
         return pd.DataFrame()
+    
 
+
+# LOAD BPJS DATA
+
+def load_bpjs():
+    try:
+        
+        # KARYAWAN
+        
+        df_karyawan = pd.read_excel(
+            FILE_PATH,
+            sheet_name="BPJS",
+            usecols="B:D"
+        )
+
+        df_karyawan.columns = ["nama", "project", "jenis_bpjs"]
+
+        df_karyawan['project'] = df_karyawan['project'].astype(str).str.strip()
+        df_karyawan['jenis_bpjs'] = df_karyawan['jenis_bpjs'].astype(str).str.strip().str.lower()
+
+        
+        # BPJS KESEHATAN
+        
+        df_kesehatan = pd.read_excel(
+            FILE_PATH,
+            sheet_name="BPJS",
+            usecols="G:H"
+        )
+
+        df_kesehatan.columns = ["periode", "pembayaran"]
+
+        
+        # BPJS TK
+        
+        df_tk1 = pd.read_excel(
+            FILE_PATH,
+            sheet_name="PAY BPJS TK",
+            usecols="C:D"
+        )
+
+        df_tk1.columns = ["periode", "pembayaran"]
+
+        df_tk2 = pd.read_excel(
+            FILE_PATH,
+            sheet_name="PAY BPJS TK",
+            usecols="F:G"
+        )
+
+        df_tk2.columns = ["periode", "pembayaran"]
+
+        
+        # CLEAN FUNCTION
+        
+        def clean_uang(df):
+            df['periode'] = df['periode'].astype(str).str.strip()
+
+            df['pembayaran'] = (
+                df['pembayaran']
+                .astype(str)
+                .str.replace('.', '', regex=False)
+            )
+
+            df['pembayaran'] = pd.to_numeric(df['pembayaran'], errors='coerce')
+
+            return df.dropna(subset=['pembayaran'])
+
+        df_kesehatan = clean_uang(df_kesehatan)
+        df_tk1 = clean_uang(df_tk1)
+        df_tk2 = clean_uang(df_tk2)
+
+        # GABUNG BPJS TK
+        df_tk = pd.concat([df_tk1, df_tk2], ignore_index=True)
+
+        # TAMBAH LABEL
+        df_kesehatan['jenis'] = 'kesehatan'
+        df_tk['jenis'] = 'tk'
+
+        return df_karyawan, df_kesehatan, df_tk
+
+    except Exception as e:
+        print("❌ ERROR LOAD BPJS:", e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+
+# =========================
+# LOAD OVERTIME DATA
+# =========================
+def load_overtime():
+    try:
+        # OVERTIME
+        df_overtime = pd.read_excel(
+            FILE_PATH,
+            sheet_name="OVERTIME DAN ABSENSI",
+            usecols="B:D",
+            skiprows=2
+        )
+        df_overtime.columns = ["project", "bulan", "overtime"]
+
+        # ABSENSI
+        df_absensi = pd.read_excel(
+            FILE_PATH,
+            sheet_name="OVERTIME DAN ABSENSI",
+            usecols="F:G",
+            skiprows=2
+        )
+        df_absensi.columns = ["periode", "absensi"]
+
+        # COST
+        df_cost = pd.read_excel(
+            FILE_PATH,
+            sheet_name="OVERTIME DAN ABSENSI",
+            usecols="I:M",
+            skiprows=2
+        )
+        df_cost.columns = [
+            "project",
+            "bulan",
+            "total_cost",
+            "overtime_cost",
+            "overtime_percent"
+        ]
+
+        return df_overtime, df_absensi, df_cost
+
+    except Exception as e:
+        print("❌ ERROR LOAD OVERTIME:", e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+
+# =========================
+# CLEANING
+# =========================
+def clean_overtime(df_overtime, df_absensi, df_cost):
+
+    # ===== OVERTIME =====
+    df_overtime = df_overtime.dropna(subset=['overtime'])
+    df_overtime['bulan'] = pd.to_datetime(df_overtime['bulan'], errors='coerce')
+
+    # ===== ABSENSI =====
+    df_absensi = df_absensi.dropna(subset=['absensi'])
+    df_absensi['periode'] = pd.to_datetime(df_absensi['periode'], errors='coerce')
+
+    # AGGREGATE PER BULAN
+    df_absensi['bulan'] = df_absensi['periode'].dt.to_period('M').astype(str)
+    absensi_bulanan = df_absensi.groupby('bulan')['absensi'].mean().reset_index()
+
+    # ===== COST =====
+    df_cost['bulan'] = pd.to_datetime(df_cost['bulan'], errors='coerce')
+
+    # CLEAN ANGKA
+    for col in ['total_cost', 'overtime_cost']:
+        df_cost[col] = (
+            df_cost[col]
+            .astype(str)
+            .str.replace(',', '', regex=False)
+        )
+        df_cost[col] = pd.to_numeric(df_cost[col], errors='coerce')
+
+    df_cost = df_cost.dropna(subset=['total_cost'])
+
+    return df_overtime, absensi_bulanan, df_cost
 
 
 
@@ -345,6 +506,28 @@ def calculate_kpi(df):
     }
 
 
+# FILTER BPJS
+
+def apply_bpjs_filters(df_karyawan, df_kesehatan, df_tk):
+    project = request.args.get("project")
+    jenis_bpjs = request.args.get("jenis_bpjs")
+    periode = request.args.get("periode")
+
+    # FILTER KARYAWAN
+    if project:
+        df_karyawan = df_karyawan[df_karyawan['project'] == project]
+
+    if jenis_bpjs:
+        df_karyawan = df_karyawan[df_karyawan['jenis_bpjs'] == jenis_bpjs.lower()]
+
+    # FILTER PERIODE (FINANSIAL)
+    if periode:
+        df_kesehatan = df_kesehatan[df_kesehatan['periode'] == periode]
+        df_tk = df_tk[df_tk['periode'] == periode]
+
+    return df_karyawan, df_kesehatan, df_tk
+
+
 
 # KPI MANPOWER
 
@@ -388,6 +571,32 @@ def calculate_training_kpi(df):
         "in_progress": len(df[df['status'] == 'in progress']),
         "cancel": len(df[df['status'] == 'cancel'])
     }
+
+
+# KPI BPJS
+
+def calculate_bpjs_kpi(df_karyawan, df_kesehatan, df_tk):
+    total_kesehatan = df_kesehatan['pembayaran'].sum()
+    total_tk = df_tk['pembayaran'].sum()
+
+    return {
+        "total_karyawan": len(df_karyawan),
+        "total_kesehatan": int(total_kesehatan),
+        "total_tk": int(total_tk),
+        "total_semua": int(total_kesehatan + total_tk)
+    }
+
+# =========================
+# KPI
+# =========================
+def calculate_overtime_kpi(df_overtime, df_absensi, df_cost):
+    return {
+        "avg_overtime": float(df_overtime['overtime'].mean()),
+        "avg_absensi": float(df_absensi['absensi'].mean()),
+        "total_cost": int(df_cost['total_cost'].sum()),
+        "overtime_cost": int(df_cost['overtime_cost'].sum())
+    }
+
 
 # DASHBOARD INTERNSHIP
 
@@ -568,6 +777,118 @@ def training_dashboard():
         "status": status.to_dict(orient='records'),
         "trend": trend.to_dict(orient='records')
     })
+
+
+# DASHBOARD BPJS
+
+@app.route("/bpjs/dashboard")
+def bpjs_dashboard():
+    df_karyawan, df_kesehatan, df_tk = load_bpjs()
+
+    
+    df_karyawan, df_kesehatan, df_tk = apply_bpjs_filters(
+        df_karyawan, df_kesehatan, df_tk
+    )
+
+    # KPI
+    kpi = calculate_bpjs_kpi(df_karyawan, df_kesehatan, df_tk)
+
+    
+    # DISTRIBUSI BPJS
+    
+    jenis = df_karyawan['jenis_bpjs'].value_counts().reset_index()
+    jenis.columns = ['jenis_bpjs', 'jumlah']
+
+    
+    # PROJECT
+    
+    project = df_karyawan['project'].value_counts().reset_index()
+    project.columns = ['project', 'jumlah']
+
+    
+    # TREND KESEHATAN
+    
+    kesehatan_trend = df_kesehatan.groupby('periode')['pembayaran'].sum().reset_index()
+
+    
+    # TREND TK
+    
+    tk_trend = df_tk.groupby('periode')['pembayaran'].sum().reset_index()
+
+    
+    # TOTAL PER BULAN
+    
+    df_all = pd.concat([df_kesehatan, df_tk])
+    total_trend = df_all.groupby('periode')['pembayaran'].sum().reset_index()
+
+    return jsonify({
+        "kpi": kpi,
+        "jenis": jenis.to_dict(orient='records'),
+        "project": project.to_dict(orient='records'),
+        "kesehatan_trend": kesehatan_trend.to_dict(orient='records'),
+        "tk_trend": tk_trend.to_dict(orient='records'),
+        "total_trend": total_trend.to_dict(orient='records')
+    })
+
+# =========================
+# DASHBOARD OVERTIME
+# =========================
+@app.route("/overtime/dashboard")
+def overtime_dashboard():
+
+    df_overtime, df_absensi, df_cost = load_overtime()
+
+    # CLEAN
+    df_overtime, df_absensi, df_cost = clean_overtime(
+        df_overtime, df_absensi, df_cost
+    )
+
+    # KPI
+    kpi = calculate_overtime_kpi(df_overtime, df_absensi, df_cost)
+
+    # =====================
+    # OVERTIME TREND (LINE)
+    # =====================
+    overtime_trend = df_overtime.copy()
+    overtime_trend['bulan'] = overtime_trend['bulan'].dt.strftime('%Y-%m')
+    overtime_trend = overtime_trend.groupby('bulan')['overtime'].mean().reset_index()
+
+    # =====================
+    # ABSENSI TREND (LINE)
+    # =====================
+    absensi_trend = df_absensi
+
+    # =====================
+    # OVERTIME PER PROJECT (BAR)
+    # =====================
+    overtime_project = df_overtime.groupby('project')['overtime'].mean().reset_index()
+
+    # =====================
+    # OVERTIME COST (BAR)
+    # =====================
+    overtime_cost = df_cost.groupby('bulan')['overtime_cost'].sum().reset_index()
+    overtime_cost['bulan'] = overtime_cost['bulan'].dt.strftime('%Y-%m')
+
+    # =====================
+    # TOP 5 PROJECT (BOTTOM)
+    # =====================
+    top_project = (
+        df_overtime.groupby('project')['overtime']
+        .mean()
+        .sort_values(ascending=False)
+        .head(5)
+        .reset_index()
+    )
+
+    return jsonify({
+        "kpi": kpi,
+        "overtime_trend": overtime_trend.to_dict(orient='records'),
+        "absensi_trend": absensi_trend.to_dict(orient='records'),
+        "overtime_project": overtime_project.to_dict(orient='records'),
+        "overtime_cost": overtime_cost.to_dict(orient='records'),
+        "top_project": top_project.to_dict(orient='records')
+    })
+
 
 # RUN
 
