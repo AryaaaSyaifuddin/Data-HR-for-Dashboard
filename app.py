@@ -105,20 +105,16 @@ def load_recruitment():
 
             df_list.append(df)
 
-        # GABUNG SEMUA DATA
         df = pd.concat(df_list, ignore_index=True)
 
-        # CLEANING
         df['posisi'] = df['posisi'].astype(str).str.strip()
         df['status'] = df['status'].astype(str).str.strip().str.lower()
 
-        # NORMALISASI STATUS
         df['status'] = df['status'].replace({
             'on process user': 'on process',
             'on process hr': 'on process'
         })
 
-        # FORMAT TANGGAL
         df['periode'] = pd.to_datetime(df['periode'], errors='coerce')
         df['bulan'] = df['periode'].dt.strftime('%B %Y')
 
@@ -131,34 +127,40 @@ def load_recruitment():
 
 
 # LOAD SALARY & PPH21
-
 def load_salary():
     try:
+        # === DATA GAJI ===
         df_gaji = pd.read_excel(
             FILE_PATH,
             sheet_name="GAJI DAN PPH21",
             usecols="B:D",
-            skiprows=2
+            skiprows=3            # ✅ lewati 3 baris header
         )
-
         df_gaji.columns = ["project", "periode", "gaji"]
-
         df_gaji['project'] = df_gaji['project'].astype(str).str.strip()
-        df_gaji['periode'] = df_gaji['periode'].astype(str).str.strip()
         df_gaji['gaji'] = pd.to_numeric(df_gaji['gaji'], errors='coerce')
+        df_gaji = df_gaji.dropna(subset=['project', 'gaji'])
 
+        # Konversi periode ke datetime, lalu format "Jan 2026"
+        df_gaji['periode_dt'] = pd.to_datetime(df_gaji['periode'], errors='coerce')
+        df_gaji['periode'] = df_gaji['periode_dt'].dt.strftime('%b %Y')
+        df_gaji = df_gaji.dropna(subset=['periode'])
+
+        # === DATA PPH21 ===
         df_pph = pd.read_excel(
             FILE_PATH,
             sheet_name="GAJI DAN PPH21",
             usecols="G:I",
-            skiprows=2
+            skiprows=3
         )
-
         df_pph.columns = ["project", "periode", "pph21"]
-
         df_pph['project'] = df_pph['project'].astype(str).str.strip()
-        df_pph['periode'] = df_pph['periode'].astype(str).str.strip()
         df_pph['pph21'] = pd.to_numeric(df_pph['pph21'], errors='coerce')
+        df_pph = df_pph.dropna(subset=['project', 'pph21'])
+
+        df_pph['periode_dt'] = pd.to_datetime(df_pph['periode'], errors='coerce')
+        df_pph['periode'] = df_pph['periode_dt'].dt.strftime('%b %Y')
+        df_pph = df_pph.dropna(subset=['periode'])
 
         return df_gaji, df_pph
 
@@ -168,7 +170,6 @@ def load_salary():
     
 
 # LOAD TRAINING DATA
-
 def load_training():
     try:
         df = pd.read_excel(
@@ -187,13 +188,11 @@ def load_training():
             "status"
         ]
 
-        # CLEANING
         df['jenis'] = df['jenis'].astype(str).str.strip().str.lower()
         df['divisi'] = df['divisi'].astype(str).str.strip()
         df['pelatihan'] = df['pelatihan'].astype(str).str.strip()
         df['status'] = df['status'].astype(str).str.strip().str.lower()
 
-        # FORMAT TANGGAL
         df['periode'] = pd.to_datetime(df['periode'], errors='coerce')
         df['bulan'] = df['periode'].dt.strftime('%B %Y')
 
@@ -206,164 +205,308 @@ def load_training():
 
 
 # LOAD BPJS DATA
-
 def load_bpjs():
     try:
-        
-        # KARYAWAN
-        
+        # =========================
+        # DATA KARYAWAN
+        # =========================
         df_karyawan = pd.read_excel(
             FILE_PATH,
             sheet_name="BPJS",
             usecols="B:D"
         )
-
         df_karyawan.columns = ["nama", "project", "jenis_bpjs"]
-
         df_karyawan['project'] = df_karyawan['project'].astype(str).str.strip()
         df_karyawan['jenis_bpjs'] = df_karyawan['jenis_bpjs'].astype(str).str.strip().str.lower()
+        # Hapus baris yang nama-nya kosong (jika ada)
+        df_karyawan = df_karyawan.dropna(subset=['nama'])
 
-        
+        # =========================
         # BPJS KESEHATAN
-        
+        # =========================
         df_kesehatan = pd.read_excel(
             FILE_PATH,
             sheet_name="BPJS",
             usecols="G:H"
         )
-
         df_kesehatan.columns = ["periode", "pembayaran"]
 
-        
-        # BPJS TK
-        
-        df_tk1 = pd.read_excel(
+        # =========================
+        # BPJS TK PERMANENT
+        # =========================
+        df_tk_permanent = pd.read_excel(
             FILE_PATH,
             sheet_name="PAY BPJS TK",
             usecols="C:D"
         )
+        df_tk_permanent.columns = ["periode", "pembayaran"]
 
-        df_tk1.columns = ["periode", "pembayaran"]
-
-        df_tk2 = pd.read_excel(
+        # =========================
+        # BPJS TK BORONGAN
+        # =========================
+        df_tk_borongan = pd.read_excel(
             FILE_PATH,
             sheet_name="PAY BPJS TK",
             usecols="F:G"
         )
+        df_tk_borongan.columns = ["periode", "pembayaran"]
 
-        df_tk2.columns = ["periode", "pembayaran"]
-
-        
-        # CLEAN FUNCTION
-        
+        # =========================
+        # FUNGSI CLEANING UANG (ROBUST)
+        # =========================
         def clean_uang(df):
-            df['periode'] = df['periode'].astype(str).str.strip()
+            def fix_number(x):
+                # Jika sudah numerik, langsung return sebagai int
+                if isinstance(x, (int, float)):
+                    return int(x) if pd.notna(x) else None
+                # Jika string, bersihkan simbol dan ribuan
+                x = str(x).strip()
+                # Hapus 'Rp', spasi, dan titik ribuan
+                x = x.replace('Rp', '').replace(' ', '').replace('.', '')
+                # Jika ada koma desimal, ambil bagian sebelum koma (asumsi tanpa desimal)
+                if ',' in x:
+                    x = x.split(',')[0]
+                try:
+                    return int(x)
+                except:
+                    return None
 
-            df['pembayaran'] = (
-                df['pembayaran']
-                .astype(str)
-                .str.replace('.', '', regex=False)
-            )
-
-            df['pembayaran'] = pd.to_numeric(df['pembayaran'], errors='coerce')
-
+            df = df.copy()
+            df['pembayaran'] = df['pembayaran'].apply(fix_number)
             return df.dropna(subset=['pembayaran'])
 
         df_kesehatan = clean_uang(df_kesehatan)
-        df_tk1 = clean_uang(df_tk1)
-        df_tk2 = clean_uang(df_tk2)
+        df_tk_permanent = clean_uang(df_tk_permanent)
+        df_tk_borongan = clean_uang(df_tk_borongan)
 
-        # GABUNG BPJS TK
-        df_tk = pd.concat([df_tk1, df_tk2], ignore_index=True)
+        # Konversi periode ke datetime
+        df_kesehatan['periode'] = pd.to_datetime(df_kesehatan['periode'], errors='coerce')
+        df_tk_permanent['periode'] = pd.to_datetime(df_tk_permanent['periode'], errors='coerce')
+        df_tk_borongan['periode'] = pd.to_datetime(df_tk_borongan['periode'], errors='coerce')
 
-        # TAMBAH LABEL
-        df_kesehatan['jenis'] = 'kesehatan'
-        df_tk['jenis'] = 'tk'
-
-        return df_karyawan, df_kesehatan, df_tk
+        return df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan
 
     except Exception as e:
         print("❌ ERROR LOAD BPJS:", e)
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-
-# =========================
-# LOAD OVERTIME DATA
-# =========================
 def load_overtime():
     try:
-        # OVERTIME
+        # === DATA OVERTIME (Kolom B:D) ===
         df_overtime = pd.read_excel(
             FILE_PATH,
             sheet_name="OVERTIME DAN ABSENSI",
             usecols="B:D",
-            skiprows=2
+            skiprows=3
         )
         df_overtime.columns = ["project", "bulan", "overtime"]
 
-        # ABSENSI
+        # === DATA ABSENSI (Kolom F:G) ===
         df_absensi = pd.read_excel(
             FILE_PATH,
             sheet_name="OVERTIME DAN ABSENSI",
             usecols="F:G",
-            skiprows=2
+            skiprows=3
         )
         df_absensi.columns = ["periode", "absensi"]
 
-        # COST
+        # === DATA COST (Kolom I:M) ===
         df_cost = pd.read_excel(
             FILE_PATH,
             sheet_name="OVERTIME DAN ABSENSI",
             usecols="I:M",
-            skiprows=2
+            skiprows=3
         )
-        df_cost.columns = [
-            "project",
-            "bulan",
-            "total_cost",
-            "overtime_cost",
-            "overtime_percent"
-        ]
+        df_cost.columns = ["project", "bulan", "total_cost", "overtime_cost", "overtime_percent"]
+
+        # === FUNGSI PEMBERSIH ANGKA (ROBUST) ===
+        def clean_number(x):
+            if pd.isna(x):
+                return None
+            if isinstance(x, (int, float)):
+                return float(x)
+            s = str(x).strip()
+            # Hapus simbol Rp, spasi
+            s = s.replace('Rp', '').replace(' ', '')
+            # Deteksi pola: jika ada titik dan koma, titik = ribuan, koma = desimal
+            if '.' in s and ',' in s:
+                s = s.replace('.', '').replace(',', '.')
+            elif ',' in s:
+                # Hanya koma: jika jumlah koma > 1 → ribuan (hapus semua)
+                if s.count(',') > 1:
+                    s = s.replace(',', '')
+                else:
+                    # Satu koma: cek apakah ada <=2 digit setelahnya → desimal
+                    parts = s.split(',')
+                    if len(parts) == 2 and len(parts[1]) <= 2:
+                        s = s.replace(',', '.')
+                    else:
+                        s = s.replace(',', '')
+            elif '.' in s:
+                # Hanya titik: jika jumlah titik > 1 → ribuan (hapus semua)
+                if s.count('.') > 1:
+                    s = s.replace('.', '')
+                # satu titik biarkan sebagai desimal
+            try:
+                return float(s)
+            except:
+                return None
+
+        # Terapkan ke kolom biaya
+        for col in ['total_cost', 'overtime_cost', 'overtime_percent']:
+            df_cost[col] = df_cost[col].apply(clean_number)
+
+        # Kolom persentase lain (sudah numerik)
+        df_overtime['overtime'] = pd.to_numeric(df_overtime['overtime'], errors='coerce')
+        df_absensi['absensi'] = pd.to_numeric(df_absensi['absensi'], errors='coerce')
+
+        # Konversi tanggal
+        df_overtime['bulan'] = pd.to_datetime(df_overtime['bulan'], errors='coerce')
+        df_absensi['periode'] = pd.to_datetime(df_absensi['periode'], errors='coerce')
+        df_cost['bulan'] = pd.to_datetime(df_cost['bulan'], errors='coerce')
+
+        # Buang baris tanpa data penting
+        df_overtime = df_overtime.dropna(subset=['project', 'bulan', 'overtime'])
+        df_absensi = df_absensi.dropna(subset=['periode', 'absensi'])
+        df_cost = df_cost.dropna(subset=['project', 'bulan', 'total_cost', 'overtime_cost'])
 
         return df_overtime, df_absensi, df_cost
 
     except Exception as e:
         print("❌ ERROR LOAD OVERTIME:", e)
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
-
-# =========================
-# CLEANING
-# =========================
-def clean_overtime(df_overtime, df_absensi, df_cost):
-
-    # ===== OVERTIME =====
-    df_overtime = df_overtime.dropna(subset=['overtime'])
-    df_overtime['bulan'] = pd.to_datetime(df_overtime['bulan'], errors='coerce')
-
-    # ===== ABSENSI =====
-    df_absensi = df_absensi.dropna(subset=['absensi'])
-    df_absensi['periode'] = pd.to_datetime(df_absensi['periode'], errors='coerce')
-
-    # AGGREGATE PER BULAN
-    df_absensi['bulan'] = df_absensi['periode'].dt.to_period('M').astype(str)
-    absensi_bulanan = df_absensi.groupby('bulan')['absensi'].mean().reset_index()
-
-    # ===== COST =====
-    df_cost['bulan'] = pd.to_datetime(df_cost['bulan'], errors='coerce')
-
-    # CLEAN ANGKA
-    for col in ['total_cost', 'overtime_cost']:
-        df_cost[col] = (
-            df_cost[col]
-            .astype(str)
-            .str.replace(',', '', regex=False)
+    
+# LOAD MCU DATA
+def load_mcu():
+    try:
+        # =========================
+        # DATA MCU
+        # =========================
+        df_mcu = pd.read_excel(
+            FILE_PATH,
+            sheet_name="MCU FEB 2026",
+            usecols="B:H"
         )
-        df_cost[col] = pd.to_numeric(df_cost[col], errors='coerce')
 
-    df_cost = df_cost.dropna(subset=['total_cost'])
+        df_mcu.columns = [
+            "nama",
+            "divisi",
+            "project",
+            "tahun",
+            "periode",
+            "tipe_mcu",
+            "hasil_mcu"
+        ]
 
-    return df_overtime, absensi_bulanan, df_cost
+        df_mcu['nama'] = df_mcu['nama'].astype(str).str.strip()
+        df_mcu['project'] = df_mcu['project'].astype(str).str.strip()
+        df_mcu['divisi'] = df_mcu['divisi'].astype(str).str.strip()
+        df_mcu['hasil_mcu'] = df_mcu['hasil_mcu'].astype(str).str.strip().str.lower()
+
+        df_mcu['periode'] = pd.to_datetime(df_mcu['periode'], errors='coerce')
+        # ✅ Ubah format bulan menjadi "Jan 2026"
+        df_mcu['bulan'] = df_mcu['periode'].dt.strftime('%b %Y')
+
+        # =========================
+        # DATA KARYAWAN (ATTRIBUTE TAMBAHAN)
+        # =========================
+        df_karyawan = pd.read_excel(
+            FILE_PATH,
+            sheet_name="MCU FEB 2026",
+            usecols="K:O"
+        )
+
+        df_karyawan.columns = [
+            "nama",
+            "branch",
+            "job",
+            "ring",
+            "gender"
+        ]
+
+        df_karyawan['nama'] = df_karyawan['nama'].astype(str).str.strip()
+        df_karyawan['gender'] = df_karyawan['gender'].astype(str).str.strip().str.lower()
+
+        # =========================
+        # DATA PAYMENT MCU
+        # =========================
+        df_pay = pd.read_excel(
+            FILE_PATH,
+            sheet_name="Pay MCU 2026",
+            usecols="T:W"
+        )
+
+        df_pay.columns = [
+            "nama",
+            "project",
+            "periode",
+            "pembayaran"
+        ]
+
+        df_pay['nama'] = df_pay['nama'].astype(str).str.strip()
+        df_pay['project'] = df_pay['project'].astype(str).str.strip()
+
+        # 🔥 BUANG BARIS DENGAN PROJECT KOSONG ATAU "nan"
+        df_pay = df_pay[
+            (df_pay['project'].notna()) & 
+            (df_pay['project'] != '') & 
+            (df_pay['project'] != 'nan')
+        ]
+
+        # Fungsi pembersih uang
+        def clean_pembayaran(x):
+            if isinstance(x, (int, float)):
+                return int(x) if pd.notna(x) else None
+            x = str(x).strip()
+            x = x.replace('Rp', '').replace(' ', '').replace('.', '')
+            if ',' in x:
+                x = x.split(',')[0]
+            try:
+                return int(x)
+            except:
+                return None
+
+        df_pay['pembayaran'] = df_pay['pembayaran'].apply(clean_pembayaran)
+        df_pay = df_pay.dropna(subset=['pembayaran'])
+
+        # ✅ Ubah format periode di df_pay menjadi "Jan 2025"
+        df_pay['periode'] = pd.to_datetime(df_pay['periode'], errors='coerce')
+        df_pay['periode'] = df_pay['periode'].dt.strftime('%b %Y')
+
+        return df_mcu, df_karyawan, df_pay
+
+    except Exception as e:
+        print("❌ ERROR LOAD MCU:", e)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+
+def clean_uang(df):
+    df = df.copy()
+
+    def fix_number(x):
+        # ✅ kalau sudah angka → JANGAN DIAPA-APAIN
+        if isinstance(x, (int, float)):
+            return x
+
+        x = str(x)
+        x = x.replace('Rp', '')
+        x = x.replace('.', '')   # hapus ribuan
+        x = x.strip()
+
+        try:
+            return int(x)
+        except:
+            return None
+
+    df['pembayaran'] = df['pembayaran'].apply(fix_number)
+
+    return df.dropna(subset=['pembayaran'])
+
+def json_safe_records(df):
+    cleaned = df.copy()
+    cleaned = cleaned.replace([float('inf'), float('-inf')], pd.NA)
+    cleaned = cleaned.astype(object).where(pd.notna(cleaned), None)
+    return cleaned.to_dict(orient='records')
 
 
 
@@ -444,17 +587,14 @@ def apply_recruitment_filters(df):
 
 
 # FILTER SALARY
-
 def apply_salary_filters(df, column_periode):
-    periode = request.args.get("periode")
+    periode = request.args.get("periode")   # format "Jan 2026"
     project = request.args.get("project")
 
     if periode:
         df = df[df[column_periode] == periode]
-
     if project:
         df = df[df['project'] == project]
-
     return df
 
 
@@ -484,6 +624,50 @@ def apply_training_filters(df):
 
     return df
 
+def apply_overtime_filters(df_overtime, df_absensi, df_cost):
+    project = request.args.get("project")
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    if project:
+        df_overtime = df_overtime[df_overtime['project'] == project]
+        df_cost = df_cost[df_cost['project'] == project]
+
+    if start and end:
+        start_dt = pd.to_datetime(start)
+        end_dt = pd.to_datetime(end)
+        df_overtime = df_overtime[(df_overtime['bulan'] >= start_dt) & (df_overtime['bulan'] <= end_dt)]
+        df_absensi = df_absensi[(df_absensi['periode'] >= start_dt) & (df_absensi['periode'] <= end_dt)]
+        df_cost = df_cost[(df_cost['bulan'] >= start_dt) & (df_cost['bulan'] <= end_dt)]
+
+    return df_overtime, df_absensi, df_cost
+
+
+# FILTER MCU
+
+def apply_mcu_filters(df_mcu, df_pay):
+    project = request.args.get("project")
+    hasil = request.args.get("hasil")
+    start = request.args.get("start")
+    end = request.args.get("end")
+
+    if project:
+        df_mcu = df_mcu[df_mcu['project'] == project]
+        df_pay = df_pay[df_pay['project'] == project] 
+
+    if hasil:
+        df_mcu = df_mcu[df_mcu['hasil_mcu'] == hasil.lower()]
+
+    if start and end:
+        df_mcu = df_mcu[
+            (df_mcu['periode'] >= pd.to_datetime(start)) &
+            (df_mcu['periode'] <= pd.to_datetime(end))
+        ]
+
+    return df_mcu, df_pay
+
+
+
 # KPI INTERNSHIP
 
 def calculate_kpi(df):
@@ -507,27 +691,23 @@ def calculate_kpi(df):
 
 
 # FILTER BPJS
-
-def apply_bpjs_filters(df_karyawan, df_kesehatan, df_tk):
+def apply_bpjs_filters(df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan):
     project = request.args.get("project")
     jenis_bpjs = request.args.get("jenis_bpjs")
     periode = request.args.get("periode")
 
-    # FILTER KARYAWAN
     if project:
         df_karyawan = df_karyawan[df_karyawan['project'] == project]
 
     if jenis_bpjs:
         df_karyawan = df_karyawan[df_karyawan['jenis_bpjs'] == jenis_bpjs.lower()]
 
-    # FILTER PERIODE (FINANSIAL)
     if periode:
         df_kesehatan = df_kesehatan[df_kesehatan['periode'] == periode]
-        df_tk = df_tk[df_tk['periode'] == periode]
+        df_tk_permanent = df_tk_permanent[df_tk_permanent['periode'] == periode]
+        df_tk_borongan = df_tk_borongan[df_tk_borongan['periode'] == periode]
 
-    return df_karyawan, df_kesehatan, df_tk
-
-
+    return df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan
 
 # KPI MANPOWER
 
@@ -574,27 +754,37 @@ def calculate_training_kpi(df):
 
 
 # KPI BPJS
-
-def calculate_bpjs_kpi(df_karyawan, df_kesehatan, df_tk):
-    total_kesehatan = df_kesehatan['pembayaran'].sum()
-    total_tk = df_tk['pembayaran'].sum()
+def calculate_bpjs_kpi(df_kesehatan, df_tk_permanent, df_tk_borongan, df_karyawan):
 
     return {
-        "total_karyawan": len(df_karyawan),
-        "total_kesehatan": int(total_kesehatan),
-        "total_tk": int(total_tk),
-        "total_semua": int(total_kesehatan + total_tk)
+        "bpjs_kesehatan": int(df_kesehatan['pembayaran'].sum()),
+        "bpjs_tk_permanent": int(df_tk_permanent['pembayaran'].sum()),
+        "bpjs_tk_borongan": int(df_tk_borongan['pembayaran'].sum()),
+        "total_semua": int(
+            df_kesehatan['pembayaran'].sum() +
+            df_tk_permanent['pembayaran'].sum() +
+            df_tk_borongan['pembayaran'].sum()
+        ),
+        "total_karyawan_bpjs": len(df_karyawan)
     }
 
-# =========================
-# KPI
-# =========================
-def calculate_overtime_kpi(df_overtime, df_absensi, df_cost):
+
+# KPI MCU
+def calculate_mcu_kpi(df, df_pay):
+    total = len(df)
+
+    fit = len(df[df['hasil_mcu'].str.contains('fit', na=False)])
+    unfit = len(df[df['hasil_mcu'].str.contains('unfit', na=False)])
+
+    # Gunakan df_pay yang sudah difilter (tanpa project kosong)
+    total_cost = df_pay['pembayaran'].sum()
+
     return {
-        "avg_overtime": float(df_overtime['overtime'].mean()),
-        "avg_absensi": float(df_absensi['absensi'].mean()),
-        "total_cost": int(df_cost['total_cost'].sum()),
-        "overtime_cost": int(df_cost['overtime_cost'].sum())
+        "total_mcu": total,
+        "fit": fit,
+        "unfit": unfit,
+        "fit_rate": round((fit / total) * 100, 2) if total > 0 else 0,
+        "total_cost": int(total_cost)
     }
 
 
@@ -704,29 +894,34 @@ def recruitment_dashboard():
 
 
 # DASHBOARD SALARY
-
 @app.route("/salary/dashboard")
 def salary_dashboard():
     df_gaji, df_pph = load_salary()
 
-    # APPLY FILTER
+    # Terapkan filter
     df_gaji = apply_salary_filters(df_gaji, "periode")
     df_pph = apply_salary_filters(df_pph, "periode")
 
     # KPI
     kpi = calculate_salary_kpi(df_gaji, df_pph)
 
-    # BAR GAJI PER PROJECT
+    # Gaji per Project (bar chart)
     gaji_project = df_gaji.groupby('project')['gaji'].sum().reset_index()
+    gaji_project = gaji_project.sort_values('gaji', ascending=False)
 
-    # LINE TREND GAJI
+    # Tren Gaji per Bulan (line chart)
     gaji_trend = df_gaji.groupby('periode')['gaji'].sum().reset_index()
+    gaji_trend['sort_date'] = pd.to_datetime(gaji_trend['periode'], format='%b %Y')
+    gaji_trend = gaji_trend.sort_values('sort_date').drop('sort_date', axis=1)
 
-    # BAR PPH21
+    # PPh21 per Project
     pph_project = df_pph.groupby('project')['pph21'].sum().reset_index()
+    pph_project = pph_project.sort_values('pph21', ascending=False)
 
-    # TREND PPH21
+    # Tren PPh21 per Bulan
     pph_trend = df_pph.groupby('periode')['pph21'].sum().reset_index()
+    pph_trend['sort_date'] = pd.to_datetime(pph_trend['periode'], format='%b %Y')
+    pph_trend = pph_trend.sort_values('sort_date').drop('sort_date', axis=1)
 
     return jsonify({
         "kpi": kpi,
@@ -738,7 +933,6 @@ def salary_dashboard():
 
 
 # DASHBOARD TRAINING
-
 @app.route("/training/dashboard")
 def training_dashboard():
     df = load_training()
@@ -780,112 +974,215 @@ def training_dashboard():
 
 
 # DASHBOARD BPJS
-
 @app.route("/bpjs/dashboard")
 def bpjs_dashboard():
-    df_karyawan, df_kesehatan, df_tk = load_bpjs()
+    df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan = load_bpjs()
 
-    
-    df_karyawan, df_kesehatan, df_tk = apply_bpjs_filters(
-        df_karyawan, df_kesehatan, df_tk
+    df_mcu, _, _ = load_mcu()
+    total_mcu = len(df_mcu)
+
+    df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan = apply_bpjs_filters(
+        df_karyawan, df_kesehatan, df_tk_permanent, df_tk_borongan
     )
 
     # KPI
-    kpi = calculate_bpjs_kpi(df_karyawan, df_kesehatan, df_tk)
+    kpi = calculate_bpjs_kpi(df_kesehatan, df_tk_permanent, df_tk_borongan, df_karyawan)
 
-    
-    # DISTRIBUSI BPJS
-    
+    # DISTRIBUSI KARYAWAN
     jenis = df_karyawan['jenis_bpjs'].value_counts().reset_index()
     jenis.columns = ['jenis_bpjs', 'jumlah']
 
-    
-    # PROJECT
-    
     project = df_karyawan['project'].value_counts().reset_index()
     project.columns = ['project', 'jumlah']
 
-    
-    # TREND KESEHATAN
-    
+    # =========================
+    # TREND PER KATEGORI
+    # =========================
     kesehatan_trend = df_kesehatan.groupby('periode')['pembayaran'].sum().reset_index()
+    kesehatan_trend['kategori'] = 'kesehatan'
 
-    
-    # TREND TK
-    
-    tk_trend = df_tk.groupby('periode')['pembayaran'].sum().reset_index()
+    tk_permanent_trend = df_tk_permanent.groupby('periode')['pembayaran'].sum().reset_index()
+    tk_permanent_trend['kategori'] = 'tk_permanent'
 
-    
-    # TOTAL PER BULAN
-    
-    df_all = pd.concat([df_kesehatan, df_tk])
-    total_trend = df_all.groupby('periode')['pembayaran'].sum().reset_index()
+    tk_borongan_trend = df_tk_borongan.groupby('periode')['pembayaran'].sum().reset_index()
+    tk_borongan_trend['kategori'] = 'tk_borongan'
+
+    trend = pd.concat([
+        kesehatan_trend,
+        tk_permanent_trend,
+        tk_borongan_trend
+    ])
+
+    trend['pembayaran'] = trend['pembayaran'].astype(int)
 
     return jsonify({
         "kpi": kpi,
         "jenis": jenis.to_dict(orient='records'),
         "project": project.to_dict(orient='records'),
-        "kesehatan_trend": kesehatan_trend.to_dict(orient='records'),
-        "tk_trend": tk_trend.to_dict(orient='records'),
-        "total_trend": total_trend.to_dict(orient='records')
+        "trend": trend.to_dict(orient='records')
     })
 
-# =========================
-# DASHBOARD OVERTIME
-# =========================
+
 @app.route("/overtime/dashboard")
 def overtime_dashboard():
-
     df_overtime, df_absensi, df_cost = load_overtime()
 
-    # CLEAN
-    df_overtime, df_absensi, df_cost = clean_overtime(
-        df_overtime, df_absensi, df_cost
-    )
+    # Terapkan filter (jika ada)
+    df_overtime, df_absensi, df_cost = apply_overtime_filters(df_overtime, df_absensi, df_cost)
 
-    # KPI
-    kpi = calculate_overtime_kpi(df_overtime, df_absensi, df_cost)
+    # ========== KPI ==========
+    avg_overtime_pct = df_overtime['overtime'].mean() * 100 if not df_overtime.empty else 0
+    avg_absensi_pct = df_absensi['absensi'].mean() * 100 if not df_absensi.empty else 0
+    total_cost = df_cost['total_cost'].sum()
+    total_overtime_cost = df_cost['overtime_cost'].sum()
 
-    # =====================
-    # OVERTIME TREND (LINE)
-    # =====================
-    overtime_trend = df_overtime.copy()
-    overtime_trend['bulan'] = overtime_trend['bulan'].dt.strftime('%Y-%m')
-    overtime_trend = overtime_trend.groupby('bulan')['overtime'].mean().reset_index()
+    # Growth overtime (bulan terbaru vs sebelumnya)
+    monthly_ov = df_overtime.groupby(df_overtime['bulan'].dt.to_period('M'))['overtime'].mean().sort_index()
+    ov_growth = 0
+    if len(monthly_ov) >= 2:
+        ov_growth = ((monthly_ov.iloc[-1] - monthly_ov.iloc[-2]) / monthly_ov.iloc[-2]) * 100
 
-    # =====================
-    # ABSENSI TREND (LINE)
-    # =====================
-    absensi_trend = df_absensi
+    # Growth absensi
+    monthly_att = df_absensi.groupby(df_absensi['periode'].dt.to_period('M'))['absensi'].mean().sort_index()
+    att_growth = 0
+    if len(monthly_att) >= 2:
+        att_growth = ((monthly_att.iloc[-1] - monthly_att.iloc[-2]) / monthly_att.iloc[-2]) * 100
 
-    # =====================
-    # OVERTIME PER PROJECT (BAR)
-    # =====================
-    overtime_project = df_overtime.groupby('project')['overtime'].mean().reset_index()
+    kpi = {
+        "avg_overtime_percent": round(avg_overtime_pct, 2),
+        "avg_absensi_percent": round(avg_absensi_pct, 2),
+        "total_cost": int(total_cost),
+        "total_overtime_cost": int(total_overtime_cost),
+        "overtime_growth": round(ov_growth, 2),
+        "absensi_growth": round(att_growth, 2)
+    }
 
-    # =====================
-    # OVERTIME COST (BAR)
-    # =====================
-    overtime_cost = df_cost.groupby('bulan')['overtime_cost'].sum().reset_index()
-    overtime_cost['bulan'] = overtime_cost['bulan'].dt.strftime('%Y-%m')
+    # ========== Monthly Overtime Summary (Line Chart) ==========
+    ov_summary = df_overtime.groupby(df_overtime['bulan'].dt.strftime('%b %Y'))['overtime'].mean().reset_index()
+    ov_summary.columns = ['bulan', 'overtime']
+    ov_summary['overtime'] = ov_summary['overtime'].round(2)  # simpan 4 digit untuk persentase akurat
+    ov_summary = ov_summary.sort_values('bulan', key=lambda x: pd.to_datetime(x, format='%b %Y'))
 
-    # =====================
-    # TOP 5 PROJECT (BOTTOM)
-    # =====================
-    top_project = (
-        df_overtime.groupby('project')['overtime']
-        .mean()
-        .sort_values(ascending=False)
-        .head(5)
-        .reset_index()
-    )
+    # ========== Monthly Attendance Summary ==========
+    att_summary = df_absensi.groupby(df_absensi['periode'].dt.strftime('%b %Y'))['absensi'].mean().reset_index()
+    att_summary.columns = ['bulan', 'absensi']
+    att_summary['absensi'] = att_summary['absensi'].round(2)
+    att_summary = att_summary.sort_values('bulan', key=lambda x: pd.to_datetime(x, format='%b %Y'))
+
+    # ========== Overtime per Project ==========
+    ov_project = df_overtime.groupby('project')['overtime'].mean().reset_index()
+    ov_project['overtime_percent'] = (ov_project['overtime'] * 100).round(2)
+    ov_project = ov_project.sort_values('overtime_percent', ascending=False)
+
+    # ========== Cost per Project ==========
+    cost_project = df_cost.groupby('project').agg({
+        'total_cost': 'sum',
+        'overtime_cost': 'sum',
+        'overtime_percent': 'mean'
+    }).reset_index()
+    cost_project['total_cost'] = cost_project['total_cost'].round(2)
+    cost_project['overtime_cost'] = cost_project['overtime_cost'].round(2)
+    cost_project['overtime_percent'] = cost_project['overtime_percent'].round(2)
+
+    # ========== Top 5 Projects by Overtime Cost ==========
+    top_cost = cost_project.nlargest(5, 'overtime_cost')[['project', 'overtime_cost']].round(2)
+
+    # ========== Monthly Overtime Cost Trend ==========
+    cost_trend = df_cost.groupby(df_cost['bulan'].dt.strftime('%b %Y'))['overtime_cost'].sum().reset_index()
+    cost_trend.columns = ['bulan', 'overtime_cost']
+    cost_trend['overtime_cost'] = cost_trend['overtime_cost'].round(2)
+    cost_trend = cost_trend.sort_values('bulan', key=lambda x: pd.to_datetime(x, format='%b %Y'))
 
     return jsonify({
         "kpi": kpi,
-        "overtime_trend": overtime_trend.to_dict(orient='records'),
-        "absensi_trend": absensi_trend.to_dict(orient='records'),
-        "overtime_project": overtime_project.to_dict(orient='records'),
-        "overtime_cost": overtime_cost.to_dict(orient='records'),
+        "overtime_summary": ov_summary.to_dict(orient='records'),
+        "attendance_summary": att_summary.to_dict(orient='records'),
+        "overtime_by_project": ov_project.to_dict(orient='records'),
+        "cost_by_project": cost_project.to_dict(orient='records'),
+        "top_cost_projects": top_cost.to_dict(orient='records'),
+        "overtime_cost_trend": cost_trend.to_dict(orient='records')
+    })  
+
+# DASHBOARD MCU
+@app.route("/mcu/dashboard")
+def mcu_dashboard():
+    df_mcu, df_karyawan, df_pay = load_mcu()
+
+    # =========================
+    # MERGE DATA
+    # =========================
+    df_full = pd.merge(df_mcu, df_karyawan, on="nama", how="left")
+
+    # =========================
+    # FILTER
+    # =========================
+    df_full, df_pay = apply_mcu_filters(df_full, df_pay)
+
+    # =========================
+    # KPI
+    # =========================
+    kpi = calculate_mcu_kpi(df_full, df_pay)
+
+    # =========================
+    # HASIL MCU (PIE)
+    # =========================
+    hasil = df_full['hasil_mcu'].value_counts().reset_index()
+    hasil.columns = ['hasil', 'jumlah']
+
+    # =========================
+    # DIVISI (BAR)
+    # =========================
+    divisi = df_full['divisi'].value_counts().reset_index()
+    divisi.columns = ['divisi', 'jumlah']
+
+    # =========================
+    # PROJECT (BAR)
+    # =========================
+    project = df_full['project'].value_counts().reset_index()
+    project.columns = ['project', 'jumlah']
+
+    # =========================
+    # TREND MCU (LINE) – SEKARANG "bulan" SUDAH FORMAT "Jan 2026"
+    # =========================
+    trend = df_full['bulan'].value_counts().reset_index()
+    trend.columns = ['bulan', 'jumlah']
+    # Sorting berdasarkan tanggal asli agar urut
+    trend['sort_date'] = pd.to_datetime(trend['bulan'], format='%b %Y', errors='coerce')
+    trend = trend.sort_values('sort_date').drop('sort_date', axis=1)
+
+    # =========================
+    # GENDER
+    # =========================
+    gender = df_full['gender'].value_counts().reset_index()
+    gender.columns = ['gender', 'jumlah']
+
+    # =========================
+    # COST PER PROJECT
+    # =========================
+    cost_project = df_pay.groupby('project')['pembayaran'].sum().reset_index()
+
+    # =========================
+    # COST TREND – PERIODE SUDAH FORMAT "Jan 2025"
+    # =========================
+    cost_trend = df_pay.groupby('periode')['pembayaran'].sum().reset_index()
+    # Sorting berdasarkan tanggal asli
+    cost_trend['sort_date'] = pd.to_datetime(cost_trend['periode'], format='%b %Y', errors='coerce')
+    cost_trend = cost_trend.sort_values('sort_date').drop('sort_date', axis=1)
+
+    # =========================
+    # TOP PROJECT (COST)
+    # =========================
+    top_project = cost_project.sort_values('pembayaran', ascending=False).head(5)
+
+    return jsonify({
+        "kpi": kpi,
+        "hasil_mcu": hasil.to_dict(orient='records'),
+        "divisi": divisi.to_dict(orient='records'),
+        "project": project.to_dict(orient='records'),
+        "trend": trend.to_dict(orient='records'),
+        "gender": gender.to_dict(orient='records'),
+        "cost_project": cost_project.to_dict(orient='records'),
+        "cost_trend": cost_trend.to_dict(orient='records'),
         "top_project": top_project.to_dict(orient='records')
     })
 
